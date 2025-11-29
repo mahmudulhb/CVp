@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Text Accuracy Checker</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--muted:#94a3b8;--accent:#60a5fa;--good:#10b981;--bad:#ef4444}
+    *{box-sizing:border-box}
+    body{font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,'Helvetica Neue',Arial; margin:0;background:linear-gradient(180deg,#071024 0%, #071827 100%);color:#e6eef8;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:28px}
+    .wrap{width:100%;max-width:1100px}
+    header{display:flex;align-items:center;gap:16px;margin-bottom:18px}
+    header h1{margin:0;font-size:20px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    .card{background:var(--card);padding:14px;border-radius:12px;box-shadow:0 6px 18px rgba(2,6,23,.6)}
+    textarea{width:100%;min-height:220px;background:transparent;border:1px solid rgba(255,255,255,.04);padding:12px;border-radius:8px;color:inherit;resize:vertical}
+    .controls{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+    .btn{background:var(--accent);border:none;color:#02203b;padding:8px 12px;border-radius:8px;cursor:pointer;font-weight:600}
+    .small{font-size:13px;color:var(--muted)}
+    .result{margin-top:12px;display:flex;gap:12px;align-items:center}
+    .score{font-size:36px;font-weight:700}
+    .breakdown{display:flex;flex-direction:column;gap:6px}
+    .badge{background:rgba(255,255,255,.03);padding:6px 8px;border-radius:8px;font-size:13px}
+    .diff-view{display:flex;gap:10px;margin-top:12px}
+    .pane{flex:1;min-height:150px;padding:10px;background:linear-gradient(180deg,rgba(255,255,255,.02),transparent);border-radius:10px;overflow:auto}
+    mark.match{background:transparent;color:inherit}
+    mark.add{background:rgba(16,185,129,.18);color:var(--good);padding:0 4px;border-radius:4px}
+    mark.del{background:rgba(239,68,68,.12);color:var(--bad);text-decoration:line-through;padding:0 4px;border-radius:4px}
+    footer.small{margin-top:10px;color:var(--muted);font-size:12px}
+    @media (max-width:880px){.grid{grid-template-columns:1fr}.diff-view{flex-direction:column}}
+    .meta{display:flex;gap:8px;flex-wrap:wrap}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Text Accuracy Checker</h1>
+      <div class="small">by Team Cyber Vampire</div>
+    </header>
+
+    <div class="grid">
+      <div class="card">
+        <label class="small">Reference / Source text</label>
+        <textarea id="textA" placeholder="Paste the source text here...">The quick brown fox jumps over the lazy dog.</textarea>
+      </div>
+
+      <div class="card">
+        <label class="small">Candidate / Compared text</label>
+        <textarea id="textB" placeholder="Paste the compared text here...">The quick brown fox jumped over the lazy dog!</textarea>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap">
+      <div class="card" style="display:flex;gap:12px;align-items:center">
+        <div class="controls">
+          <label><input type="checkbox" id="ignoreCase" checked /> Ignore case</label>
+          <label><input type="checkbox" id="ignorePunct" checked /> Ignore punctuation</label>
+          <label class="small" style="margin-left:8px"><input type="checkbox" id="wordMode" checked /> Word-level comparison</label>
+        </div>
+      </div>
+
+      <button class="btn" id="compareBtn">Compare</button>
+      <button class="btn" id="clearBtn" style="background:#334155">Clear</button>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="result">
+        <div>
+          <div class="small">Similarity</div>
+          <div class="score" id="score">—</div>
+        </div>
+        <div class="breakdown">
+          <div class="badge small" id="charSim">Chars: —</div>
+          <div class="badge small" id="wordSim">Words: —</div>
+          <div class="badge small" id="jaccard">Jaccard: —</div>
+        </div>
+      </div>
+
+      <div class="diff-view" id="diffView">
+        <div class="pane" id="paneA"><strong class="small">Source</strong><div id="outA" style="margin-top:8px"></div></div>
+        <div class="pane" id="paneB"><strong class="small">Compared</strong><div id="outB" style="margin-top:8px"></div></div>
+      </div>
+
+      <footer class="small">Tip: Toggle <em>Ignore punctuation</em> to treat punctuation differences as irrelevant.</footer>
+    </div>
+  </div>
+
+  <script>
+    function normalize(text, opts){
+      if(!text) return '';
+      let t = text;
+      if(opts.ignoreCase) t = t.toLowerCase();
+      if(opts.ignorePunct) t = t.replace(/[\p{P}\p{S}]/gu, ''); 
+      t = t.replace(/\s+/g,' ').trim();
+      return t;
+    }
+
+    function levenshtein(a, b){
+      if(a === b) return 0;
+      const al = a.length, bl = b.length;
+      if(al === 0) return bl;
+      if(bl === 0) return al;
+      const dp = Array.from({length:al+1},()=>new Uint16Array(bl+1));
+      for(let i=0;i<=al;i++) dp[i][0]=i;
+      for(let j=0;j<=bl;j++) dp[0][j]=j;
+      for(let i=1;i<=al;i++){
+        for(let j=1;j<=bl;j++){
+          const cost = a[i-1]===b[j-1]?0:1;
+          dp[i][j] = Math.min(dp[i-1][j]+1, dp[i][j-1]+1, dp[i-1][j-1]+cost);
+        }
+      }
+      return dp[al][bl];
+    }
+
+    function jaccard(aWords, bWords){
+      const aSet = new Set(aWords.filter(Boolean));
+      const bSet = new Set(bWords.filter(Boolean));
+      const inter = [...aSet].filter(x=>bSet.has(x)).length;
+      const union = new Set([...aSet,...bSet]).size;
+      return union === 0 ? 1 : inter/union;
+    }
+
+    function lcs(a, b){
+      const n=a.length, m=b.length;
+      const dp = Array.from({length:n+1},()=>new Array(m+1).fill(0));
+      for(let i=n-1;i>=0;i--){
+        for(let j=m-1;j>=0;j--){
+          if(a[i]===b[j]) dp[i][j]=1+dp[i+1][j+1];
+          else dp[i][j]=Math.max(dp[i+1][j], dp[i][j+1]);
+        }
+      }
+      let i=0,j=0; const matches = [];
+      while(i<n && j<m){
+        if(a[i]===b[j]){ matches.push({i,j,val:a[i]}); i++; j++; }
+        else if(dp[i+1][j] >= dp[i][j+1]) i++; else j++;
+      }
+      return matches;
+    }
+
+    function renderHighlights(aWords,bWords,matches){
+      const aClasses = Array(aWords.length).fill('del');
+      const bClasses = Array(bWords.length).fill('add');
+      matches.forEach(m=>{ aClasses[m.i] = 'match'; bClasses[m.j] = 'match'; });
+      function toHTML(words, classes){
+        return words.map((w,i)=>{
+          const cls = classes[i];
+          const safe = escapeHtml(w);
+          if(cls==='match') return `<mark class="match">${safe}</mark>`;
+          if(cls==='del') return `<mark class="del">${safe}</mark>`;
+          return `<mark class="add">${safe}</mark>`;
+        }).join(' ');
+      }
+      return {aHtml: toHTML(aWords,aClasses), bHtml: toHTML(bWords,bClasses)};
+    }
+
+    function escapeHtml(s){ return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+    document.getElementById('compareBtn').addEventListener('click', ()=>{
+      const rawA = document.getElementById('textA').value;
+      const rawB = document.getElementById('textB').value;
+      const opts = {ignoreCase:document.getElementById('ignoreCase').checked, ignorePunct:document.getElementById('ignorePunct').checked};
+      const normA = normalize(rawA, opts);
+      const normB = normalize(rawB, opts);
+
+      const charDist = levenshtein(normA, normB);
+      const maxLen = Math.max(normA.length, normB.length);
+      const charSim = maxLen===0?1:(1 - charDist/maxLen);
+
+      const aWords = normA.length?normA.split(' '):[];
+      const bWords = normB.length?normB.split(' '):[];
+
+      const matches = lcs(aWords, bWords);
+      const wordSim = (aWords.length||bWords.length) ? (2*matches.length)/(aWords.length + bWords.length) : 1;
+
+      const jac = jaccard(aWords, bWords);
+
+      const overall = Math.round(((charSim*0.5 + wordSim*0.4 + jac*0.1) * 100) * 100)/100;
+
+      document.getElementById('score').textContent = overall + '%';
+      document.getElementById('charSim').textContent = `Chars: ${Math.round(charSim*10000)/100}% (distance ${charDist})`;
+      document.getElementById('wordSim').textContent = `Words: ${Math.round(wordSim*10000)/100}% (matched ${matches.length})`;
+      document.getElementById('jaccard').textContent = `Jaccard: ${Math.round(jac*10000)/100}%`;
+
+      const hv = renderHighlights(aWords,bWords,matches);
+      document.getElementById('outA').innerHTML = hv.aHtml || '<span class="small">(no words)</span>';
+      document.getElementById('outB').innerHTML = hv.bHtml || '<span class="small">(no words)</span>';
+
+      const scEl = document.getElementById('score');
+      const s = overall;
+      scEl.style.color = s>=85? 'var(--good)': s>=60? 'var(--accent)' : 'var(--bad)';
+    });
+
+    document.getElementById('clearBtn').addEventListener('click', ()=>{
+      document.getElementById('textA').value = '';
+      document.getElementById('textB').value = '';
+      document.getElementById('score').textContent = '—';
+      document.getElementById('outA').innerHTML = '';
+      document.getElementById('outB').innerHTML = '';
+      document.getElementById('charSim').textContent = 'Chars: —';
+      document.getElementById('wordSim').textContent = 'Words: —';
+      document.getElementById('jaccard').textContent = 'Jaccard: —';
+    });
+
+    document.getElementById('compareBtn').click();
+  </script>
+</body>
+</html>
